@@ -1,0 +1,100 @@
+---
+name: embrace-docs
+description: Use when the user explicitly invokes /embrace-docs or asks to sync the AC3_Docs MkDocs site after committing changes in /opt/my-buildroot/, ~/Projects/monitor/, or ~/Projects/aplicacao_ac/. Manual trigger only — never auto-fire on adjacent doc-related tasks during normal coding.
+---
+
+# embrace-docs
+
+## Overview
+
+Manual sync skill for the EmbraceOS documentation site at `~/IdeaProjects/AC3_Docs/` (MkDocs Material, hosted at `https://scenario1733514.gitlab.io/AC3_Docs/`). Diffs recent commits across the three source repos, proposes targeted edits, and updates `mkdocs.yml` nav when new pages are added.
+
+**Manual only.** Wait for an explicit invocation. Do NOT fire on commits in nearby coding sessions.
+
+## When to use
+
+- User invokes `/embrace-docs` or says "sync docs", "update the docs", "atualiza a documentação".
+- Recent commits in `/opt/my-buildroot/`, `~/Projects/monitor/`, or `~/Projects/aplicacao_ac/` introduced behavior, architecture, or protocol changes.
+
+When NOT to use:
+- Normal coding sessions, even when touching files documented in AC3_Docs.
+- Pure `fix:` or `ci:` (build-only) commits unless the user asks specifically.
+- The user has not committed yet — ask them to commit first so the diff range is well-defined.
+
+## Workflow
+
+1. **Range.** Default = "since the last AC3_Docs commit". Otherwise ask the user for a commit range, branch, or "the last N commits".
+2. **Diff the 3 repos** for the range:
+   ```bash
+   git -C /opt/my-buildroot              log --oneline <range>
+   git -C ~/Projects/monitor             log --oneline <range>
+   git -C ~/Projects/aplicacao_ac        log --oneline <range>
+   ```
+3. **Categorize each commit** by its conventional prefix:
+
+   | Prefix | Default action |
+   |---|---|
+   | `feat:` | Update / add page |
+   | `refactor:` (architectural) | Update page |
+   | `ci:` | Update `Embrace2/CICD/` |
+   | `fix:` | Skip unless behavior changed |
+   | `init:`, cleanup, formatting | Skip |
+   | `teste:` | Skip |
+
+4. **Map each kept commit** to a doc home using the table below.
+5. **Propose** the edits as a unified diff in the chat. Wait for approval. Do **not** edit files yet.
+6. **Apply** approved edits.
+7. **Update `mkdocs.yml`** if new pages were added (place under the matching top-level nav section).
+8. **Offer** `mkdocs serve` (port 8000) for local verification.
+
+## Repo → docs mapping
+
+| Source change | Doc home in `AC3_Docs/docs/` |
+|---|---|
+| CI/CD in **any** repo (workflows, runners, release rules) | `Embrace2/CICD/` — covers all 3 pipelines |
+| Buildroot RAUC / version / artifact pipeline | `Embrace2/CICD/`, `Embrace2/Arquitetura Embrace2.md` |
+| Buildroot board / overlay / kernel | `Embrace2/Arquitetura Embrace2.md`, `Hardware/HARDWARE.md` |
+| Monitor architecture / lifecycle | `Embrace2/Monitor de Sistema Embrace2.md` |
+| Monitor↔Firmware protocol | `Embrace2/Protocolos/Protocolo Monitor e Firmware.md` |
+| Monitor↔Config protocol | `Protocolos/Config e Monitor Embrace2.md` |
+| Firmware module add / change | `Embrace2/Modulos/...` (subpage for the module family) |
+| Firmware module communication / connectors / links | `Embrace2/Protocolos/Protocolo Comunicação Modular.md` |
+| Firmware logs / i18n keys | `Logs/`, `Logs/especificacaoE2/` |
+| Hardware / kernel constraints | `Hardware/HARDWARE.md` |
+| New module's own readme | `Embrace2/Modulos/<family>.md` and link in `mkdocs.yml` |
+
+## Material conventions to preserve
+
+- Portuguese (pt-BR) text. Identifiers, file names, English-only library names quoted verbatim.
+- Code fences with explicit language: `bash`, `cpp`, `yaml`, `json`, `python`.
+- Admonitions: `!!! note`, `!!! warning`, `!!! info`, `!!! danger` for hardware-limit warnings.
+- Mermaid via fenced ```mermaid``` block.
+- `pymdownx.tabbed` for variant code (e.g., x86 vs ARM).
+- `pymdownx.details` for collapsible long sections.
+- Theme is `material` with overrides under `docs/overrides/` and palette in `mkdocs.yml`. Don't change palette, logo, or theme unless asked.
+
+## Updating `mkdocs.yml`
+
+`nav:` is a nested YAML tree mirroring `docs/`. Add new pages under the matching top-level section from the mapping table. Use sentence case for nav titles (matching existing entries). Example:
+
+```yaml
+- Embrace2:
+    - Modulos:
+        - "Lógica e Automação": Embrace2/Modulos/Logica e Automacao.md
+        - "Novo Módulo Foo":   Embrace2/Modulos/NovoModuloFoo.md   # ← added
+```
+
+## Common mistakes
+
+- Editing without first showing the diff. **Always propose first.**
+- New page added but `mkdocs.yml` not updated → page exists but isn't linked.
+- Documenting every `fix:` commit. They're noise; skip unless behavior changed.
+- Touching `docs/superpowers/specs/` files without explicit permission — those are internal specs.
+- English prose inside a Portuguese page.
+- Forgetting that `Embrace2/CICD/` must cover all three pipelines (buildroot + monitor + firmware), not just buildroot.
+
+## Cross-references
+
+- → `embrace-buildroot`, `embrace-monitor`, `embrace-firmware` for the actual behavior context behind the change being documented.
+- → `add-firmware-module` for the docs entry pattern when the change is a new module.
+- Internal spec: `docs/superpowers/specs/2026-05-08-embrace-skills-design.md`.

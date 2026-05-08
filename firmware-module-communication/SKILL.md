@@ -1,0 +1,234 @@
+---
+name: firmware-module-communication
+description: Use when work touches inter-module communication, connector / link activation, timers, or modular payload routing in ~/Projects/aplicacao_ac/, or when diagnosing "module A isn't reacting to module B's state change", "timer fires but nothing happens", or a slow / overflowing dispatcher (/LOGS/debugDispatcher.txt). Covers the four singletons (Dispatcher, GerenciadorTimer, GerenciadorLinks, GerenciadorComunicacaoModular), the AutoConsumerDispatcher helper, the DispatcherBlackBox ring buffer, the connector-vs-link distinction (connectors = static, module-defined; links = dynamic, project-defined in Projeto.db), and the end-to-end debug ladder.
+---
+
+# firmware-module-communication
+
+## Overview
+
+Four singleton classes in `Core/` coordinate everything between firmware modules at runtime:
+
+| Class | Role | Singleton accessor |
+|---|---|---|
+| `Dispatcher` | One global FIFO for module-to-module messages. Single thread consumes. | `Dispatcher::getInstance()` |
+| `GerenciadorTimer` | Pool of timers; on fire, posts a notification through the Dispatcher to the owning module. | `GerenciadorTimer::getInstance()` |
+| `GerenciadorLinks` | Activates digital / analog / text **connectors** based on the project's **link** table. | `GerenciadorLinks::getInstance()` |
+| `GerenciadorComunicacaoModular` | Builds + sends modular packets between modules through the Dispatcher. | `GerenciadorComunicacaoModular::getInstance()` |
+
+Plus two helpers:
+
+| Class | Role |
+|---|---|
+| `AutoConsumerDispatcher` | A `ModuloInterpretador` whose body is a `CPPUtils::Runnable`. Lets non-module code receive Dispatcher messages without writing a full module. |
+| `DispatcherBlackBox<N>` | Ring buffer of `N` (default 64) recent dispatcher events. Dumps to `/LOGS/debugDispatcher.txt` on slow messages or high queues. |
+
+## The connector-vs-link distinction (read this first)
+
+This is the single most important mental model and the most common source of "X doesn't react to Y" bugs.
+
+|   | Connector | Link |
+|---|---|---|
+| **Defined where** | In a module's code (`UtilsFoo.h` → `IDsFoo` enum + `GeradorHandlersFoo.h`) | In `Projeto.db` (the user's project) |
+| **Lifetime** | Static — fixed for a given module's source code | Dynamic — created by the user, changes per project, re-resolved on project reload |
+| **Owner** | The module class | `GerenciadorLinks` |
+| **Identity** | `int idConector` (per module) | `int idLink` (project-wide) |
+| **Created at** | Compile time (in code) + module instantiation | Project load (`Projeto.db` → `inicializarLinks`) |
+| **Resolution** | N/A | `inicializarArrayConectores` maps each connector ID to a `void*` module pointer; `inicializarArrayLinks` populates the link table |
+
+**A link binds N connectors together.** When any input-side connector's value changes, `GerenciadorLinks::alterarValorLink(idLink, payload, conectorOrigem)` propagates the new payload to every other connector listed under that link.
+
+## `Dispatcher` (`Core/Dispatcher.{h,cpp}`)
+
+Singleton message bus. Producers call `adicionarMensagem(Conector &destino, shared_ptr<Payload> &payload)`; the dispatcher thread (`iniciarThread`) consumes the FIFO via `executarMensagens()` and runs `consumirMensagem` per message.
+
+Constants:
+- `LIMITE_EXECUCOES_CONSECUTIVAS_DISPATCHER = 15000` — cap per execution batch.
+- `TAMANHO_BUFFER_DISPATCHER = 1_000_000` — buffer/queue ceiling.
+
+Lifecycle controls:
+- `iniciarThread()` — start the consumer.
+- `interromperExecucao()` / `reiniciarExecucao()` — pause / resume (used during project reload).
+- `limparExecucao()` — drain pending messages.
+- `removerMensagensDoModulo(void *modulo)` — purge anything aimed at a module being deleted (cross-ref `GerenciadorDelecaoDispositivos`).
+- `finalizar()` — shutdown.
+
+Thread-safety: a static `mutex_` guards `getInstance`; `m_mutexList` guards the message list.
+
+## `GerenciadorTimer` (`Core/GerenciadorTimer.{h,cpp}`)
+
+Pool-allocated timers. Each `TimerAC` knows its owning module pointer + an `idTimer` chosen by the module.
+
+Constants:
+- `TAMANHO_INICIAL_POOL_TIMERS = 50000`
+- `TAMANHO_ON_DEMAND_POOL_TIMERS = 1000` (incremental expansion)
+- `INTERVALO_EXECUCAO_TIMERS = 10` ms (tick)
+- `ERRO_MAXIMO_EXECUCAO_TIMERS = 100`
+
+API a module calls:
+```cpp
+GerenciadorTimer::getInstance().alocarTimer(this,
+                                            IDsFoo::T_DEBOUNCE,
+                                            500 /* ms */,
+                                            GerenciadorTimer::TipoTimer::ONE_SHOT);
+GerenciadorTimer::getInstance().desalocarTimer(this, IDsFoo::T_DEBOUNCE);
+GerenciadorTimer::getInstance().isTimerAtivo(this, IDsFoo::T_DEBOUNCE);
+GerenciadorTimer::getInstance().getTempoDecorrido(this, IDsFoo::T_DEBOUNCE);
+```
+
+When a timer fires, the manager calls `adicionarMensagem(modulo, idTimer)` internally. **The notification reaches the module via the Dispatcher**, not a direct callback. The module receives it through a `HandlerPayloadTimer<Self>` in its handler chain (added inside `GeradorHandlersFoo`).
+
+Cleanup on module deletion: `desalocarTimers(void *idModulo)` — purge all timers belonging to a module. Called by `GerenciadorDelecaoDispositivos`.
+
+## `GerenciadorLinks` (`Core/GerenciadorLinks.{h,cpp}`)
+
+State:
+```cpp
+std::vector<Conector>       conectores;   // every connector across every loaded module
+std::vector<Link>           links;        // populated from Projeto.db
+std::vector<std::vector<int>> agregadores; // groups of links sharing an aggregator
+```
+
+Each `Link` holds `idPrimeiroConector`, `quantidadeConectores`, `indiceAgregador`, and the current `payload`.
+
+**Project load sequence** (called from `GerenciadorInicializacao` / `GerenciadorAlteracoesProjeto` after `Projeto.db` is read):
+
+1. `inicializarArrayConectores(unordered_map<int, void*> modulos)` — for each connector declared by a loaded module, register the (idConector → module pointer) pair.
+2. `inicializarAgregadores(unordered_map<int, int> relacaoAgregadores)` — set up aggregator groups.
+3. `inicializarArrayLinks(unordered_map<int, int> relacaoAgregadores)` — populate the link table from `Projeto.db`.
+4. `inicializarLinks(unordered_map<int, void*> modulos)` — final wiring; checks both endpoints exist.
+
+Cleanup: `limparTabelaLinks()`, `limparTabelaConectores()`.
+
+**Runtime change propagation:**
+```cpp
+GerenciadorLinks::getInstance().alterarValorLink(idLink, payload, conectorOrigem);
+```
+- Looks up the link's connector list.
+- For each connector that isn't the origin, dispatches the new payload to the owning module via the Dispatcher.
+- For aggregators, also walks `listarConectoresAgregador` to fan out across the group.
+
+`mapearPayloadConectoresEntrada()` snapshots the current input-side state (used at warm boot to seed modules).
+
+If `inicializarLinks` finds a link referencing a connector that isn't in the connector array (typo in `IDsFoo`, module not loaded, project mismatch), the link is **silently unresolved** — that's the most common "doesn't react" cause.
+
+## `GerenciadorComunicacaoModular` (`Core/GerenciadorComunicacaoModular.{h,cpp}`)
+
+Lightweight packet builder + sender. Modules use it for messages that aren't connector-link state changes (queries, replies, broadcasts).
+
+```cpp
+auto pkt = GerenciadorComunicacaoModular::getInstance()
+            .gerarPacote(TipoComandoComunicacaoModular::CONSULTA_VALOR_ANALOGICO, /*dataSize=*/4);
+// ... fill payload ...
+GerenciadorComunicacaoModular::getInstance().enviarPayload(enderecoDestino, pkt);
+```
+
+Convenience helper for analog-link query replies:
+```cpp
+auto reply = GerenciadorComunicacaoModular::getInstance()
+              .getPayloadRetornoLinkAnalogicoComIndice(idLinkProjeto, indice, valor);
+// → Payload of size TAMANHO_PAYLOAD_VALOR_LINK_ANALOGICO_COM_INDICE = 7
+```
+
+`enviarPayload` ultimately calls `Dispatcher::adicionarMensagem` — modular messages share the same FIFO as connector propagations.
+
+The receiving side handles modular packets through `HandlerPayloadModularBuilder` + `HandlerModular*` chain entries (e.g., `HandlerModularConsultaValorAnalogico<Self>`) added in the module's `GeradorHandlers<Self>`.
+
+## `AutoConsumerDispatcher`
+
+Wraps a `CPPUtils::Runnable` as a `ModuloInterpretador`. Use it to receive dispatcher messages from non-module code:
+```cpp
+AutoConsumerDispatcher::adicionarConsumerDispatcher([](/* args */){
+    // run whatever
+});
+```
+The instance behaves as a module from the dispatcher's point of view but doesn't go through the project / Projeto.db pipeline. Useful for one-off internal hooks.
+
+## `DispatcherBlackBox<N>` (`Core/DispatcherBlackBox.h`)
+
+Embedded inside `Dispatcher` (`#define DEBUG_BLACKBOX_DISPATCHER 1`). Ring buffer of `N=BLACKBOX_CAPACIDADE=64` recent events:
+
+```
+EventoDispatcher{
+    Tipo: Vazio | Enfileirada | Iniciada | Concluida,
+    moduloOrigem, moduloDestino, tamanhoFila, timestampMs, duracaoMs, tipoComando
+}
+```
+
+Dumps to `/LOGS/debugDispatcher.txt` when:
+- A handler runs ≥ `LIMIAR_DUMP_MS = 100` ms (`registrarConcluida` triggers).
+- Queue length ≥ `FILA_ALTA_WATERMARK = 200` (with `FILA_ALTA_COOLDOWN_MS = 5000` throttle).
+
+Each dump shows recent events plus running stats (count, mean, max, >100 ms / >1 s / >5 s buckets). Module names are resolved by:
+1. Known hardcoded addresses (ComunicacaoMonitor, Config, DriverCloud/GPIO/Ethernet/Serial, BuiltIn, EmbraceNTLv2, ControladorDataHora, ConexaoEApp2, AssistenteVirtual, ControladorIntegracao).
+2. Project-loaded module ID via `GerenciadorModulos::getIDModuloPeloEndereco` → `DAODadosComuns::getNome`.
+3. Fallback `dladdr` for the `.so` name.
+
+When debugging a hang, slow scene, or message storm, **read `/LOGS/debugDispatcher.txt`**.
+
+## Project lifecycle (load / reload)
+
+Triggered by `GerenciadorAlteracoesProjeto` when `Projeto.db` changes:
+
+1. `Dispatcher::interromperExecucao()` — pause consumer.
+2. `Dispatcher::limparExecucao()` — drain queue.
+3. `GerenciadorTimer::interromperExecucao()` — freeze timers.
+4. `GerenciadorDelecaoDispositivos` runs: for each removed module, `Dispatcher::removerMensagensDoModulo`, `GerenciadorTimer::desalocarTimers(modulo)`.
+5. `GerenciadorLinks::limparTabelaLinks` + `limparTabelaConectores`.
+6. `GerenciadorInicializacao` rebuilds: load DAOs from `Projeto.db`, instantiate modules, register connectors, then `GerenciadorLinks::inicializar*` sequence.
+7. `GerenciadorTimer::retornarExecucao()` + `Dispatcher::reiniciarExecucao()`.
+
+Modules are deleted via shared-library `dlclose`; in-flight messages must be purged first or you get a use-after-free in `consumirMensagem`.
+
+## End-to-end example
+
+User presses a Pulsador → SDM8 channel turns on → RoomControl notices the load is on:
+
+1. **Pulsador** module's NTL-bound input connector observes the physical press; updates its connector value.
+2. **`GerenciadorLinks::alterarValorLink`** — looks up every link that includes the Pulsador's output connector; for each link, dispatches the new digital payload to the SDM8 channel's input connector.
+3. **`Dispatcher`** delivers the message → SDM8's handler chain (built by `GeradorHandlersSDM8`) matches the connector ID via `HandlerPayloadDigital` → SDM8 calls its `tratarAcionamento` → drives the relay.
+4. SDM8 then **emits a state change** through `SenderPayloadModular<Self>` (its mixin) → `GerenciadorComunicacaoModular::enviarPayload` to RoomControl's address (resolved by the modular-packet `tipo`).
+5. **RoomControl**'s `HandlerModular*` chain entry runs → updates its `EstadoSensor` / `ControleEstadoAmbiente` → may emit further events through `GerenciadorComunicacaoModular` (Cena selection, Day/Night, etc.).
+
+Every hop uses the **same Dispatcher queue**.
+
+## Debug ladder: "module A isn't reacting to module B"
+
+Walk in order — first miss is the cause:
+
+1. **Is the link in `Projeto.db`?** Inspect the project file or use the Config app's link list. If absent → user error.
+2. **Did `GerenciadorLinks::inicializarLinks` resolve it?** Both connector IDs must be present in the connector array. Check the smart logs from `GerenciadorInicializacao` — unresolved links are logged.
+3. **Is the producer connector's value actually changing?** Add a smart log on the producer side or scope-trace through `alterarValorLink`.
+4. **Is the link wired to the right consumer connector?** Connector ID typo in `IDsFoo` is the classic cause.
+5. **Does the consumer module's handler chain handle that connector ID?** If `GeradorHandlersFoo::getHandlers` doesn't add a `HandlerPayloadDigital`/`Analogico`/`Texto` for the ID, the message is delivered but no-op.
+6. **If a timer is in the path:** is it allocated (`isTimerAtivo`)? Did it fire (smart log)? Is the `HandlerPayloadTimer<Self>` registered for that `idTimer`?
+7. **If `GerenciadorComunicacaoModular` is in the path:** is the destination address correct? Hardcoded firmware addresses are in `ModulosFirmware`/`GerenciadorModulos`. For project modules, the address comes from `GerenciadorModulos::getEnderecoPeloID`.
+
+If the dispatcher itself is the suspect (everything seems wired but messages are slow / lost):
+
+8. **Read `/LOGS/debugDispatcher.txt`** — look for `>1s` / `>5s` rows or `[FILA_ALTA]` markers. The destination column tells you which module's handler is hogging the dispatcher.
+9. **Check queue size** — `tamanhoFila >= 200` means a handler is consistently slower than the producer rate.
+
+## Common pitfalls
+
+| Pitfall | Symptom | Fix |
+|---|---|---|
+| Connector ID typo in `IDsFoo` | Link unresolved, silent | Verify `IDsFoo` matches what `Projeto.db` references |
+| Module not registered with `GerenciadorModulos` | Link target points at nullptr | Confirm the module instantiation populates the modules map before `inicializarArrayConectores` |
+| Forgot `HandlerPayloadDigital`/etc. for an ID | Message delivered, no behavior | Add it in `GeradorHandlersFoo::getHandlers` |
+| Timer allocated but no `HandlerPayloadTimer<Self>` | Timer fires, nothing reacts | Add `b.addHandler(new HandlerPayloadTimer<Self>(self))` |
+| Forgot `desalocarTimers(this)` on destruction | Timer fires after module unload → UAF | Override destructor; rely on `GerenciadorDelecaoDispositivos` |
+| Modular packet sent to wrong destination | No handler runs on the receiver | Recheck `enviarPayload` address; use `ModulosFirmware::getInstance()` for known firmware modules |
+| Slow handler (>100 ms) | `/LOGS/debugDispatcher.txt` dumps | Move heavy work off the dispatcher thread (use a worker / `AutoConsumerDispatcher`) |
+| Queue grows during scene transitions | `[FILA_ALTA]` markers | Reduce work per message; coalesce; break long handlers |
+| Project reload race | Crash in `consumirMensagem` after reload | Confirm reload sequence (`interromperExecucao` → `removerMensagensDoModulo` → `dlclose`) |
+| Connector lifetime bug after deletion | Stale `void*` in connector array | `limparTabelaConectores` must run before `dlclose`-ing modules |
+
+## Cross-references
+
+- → `add-firmware-module` for the per-module triplet (connectors, timers, modular payload) you must declare for any new module.
+- → `embrace-firmware` for the broader codebase context.
+- → `analyze-core-dump` when a crash backtrace lives inside `Dispatcher::consumirMensagem`, `GerenciadorTimer::execucaoTimers`, or `GerenciadorLinks::alterarValorLink`.
+- `AC3_Docs/docs/Embrace2/Protocolos/Protocolo Comunicação Modular.md` — protocol-level packet format.
+- Source-of-truth headers: `Core/{Dispatcher.h, GerenciadorTimer.h, GerenciadorLinks.h, GerenciadorComunicacaoModular.h, AutoConsumerDispatcher.h, DispatcherBlackBox.h}`.
+- Production debug log on the device: `/LOGS/debugDispatcher.txt`.

@@ -1,0 +1,273 @@
+---
+name: embrace-monitor
+description: Use when working in ~/Projects/monitor/ or on the embrace_monitor C++20 daemon. Covers the IWorker pattern, MonitorFirmware singleton, WDTPulse (hardware watchdog over GPIO), AutenticacaoHardware, MonitorHardware, NTPUtil, ConexaoConfig (TCP), ConexaoFirmware (TCP + Unix socket between monitor and Embrace2Application), TokenCloud + EmbraceWebsocket + ComunicacaoCloud, AtualizacaoSistema (RAUC OTA), ServiceLogs, ConfigWebAPI (mongoose HTTP backend + Angular frontend at /opt/monitor/www/), the multiple architecture-aware build dirs, and core-dump generation hooks (prctl + crashHook). EmbraceOS has no journalctl; debug ladder uses dmesg + ServiceLogs + core dumps; HARDWARE.md is the primary constraint reference.
+---
+
+# embrace-monitor
+
+## Overview
+
+Daemon running on EmbraceOS as user `scenario`, binary at `/home/scenario/embrace_monitor`. Manages firmware lifecycle, talks to the Config app over TCP, mediates Cloud (REST + WebSocket), pulses the hardware watchdog, runs RAUC OTA, serves the local Angular frontend over HTTPS, and emits structured logs through the **ServiceLogs** library.
+
+The daemon is composed around a single `MonitorFirmware` singleton that implements every external-facing interface (`OwnerConexaoConfig`, `IOwnerConexaoFirmware`, `ExecutorLimpezaDisco`, `IComandosServicos`, `IWorker`, `IOwnerComunicacaoCloud`).
+
+EmbraceOS has **no journalctl** — runtime debug uses `dmesg` + ServiceLogs + core dumps. ARM target constraints live in `~/IdeaProjects/AC3_Docs/docs/Hardware/HARDWARE.md` (no swap, OOM-killer, fd / stack / thread caps, hardware watchdog, thermal trip).
+
+## Layout
+
+```
+~/Projects/monitor/
+├── main.cpp                       — signal handlers, prctl(PR_SET_DUMPABLE), boot sequence
+├── MonitorFirmware.{h,cpp}        — central singleton, owner of every connection
+├── IWorker.h                      — Requisitante { CONFIG, FIRMWARE } worker contract
+├── ConexaoExterna/
+│   ├── ConexaoConfig.{h,cpp}      — TCP server for Config app
+│   ├── TCP/{ComandoTCP,ComunicacaoTCPTransferenciaArquivo}.h
+│   ├── HTTP/HTTPConfig.h          — HTTP shim for Config flows
+│   ├── UDP/UDPControladora.h      — UDP discovery (Sistema UDP Embrace)
+│   ├── WebSocket/{WebSocketClient,EmbraceWebsocket}.h — Cloud WS
+│   ├── ComunicacaoCloud.{h,cpp}   — REST async to cloud
+│   ├── TokenCloud.h, TokenRenewer.h, DAOTokenCloud.h — cloud auth
+│   └── ZeroconfRegister.h         — mDNS/Avahi
+├── Firmware/
+│   ├── ConexaoFirmware.{h,cpp}    — TCP + Unix socket to Embrace2Application
+│   ├── StatusFirmware.h           — enum class StatusFirmware
+│   ├── ConfiguracoesExecucaoFirmware.h, OwnerConexaoFirmware.h
+├── Hardware/
+│   ├── WDTPulse.{h,cpp}           — pulses external watchdog GPIO
+│   ├── MonitorHardware.{h,cpp}    — watches sensors, throttling, etc.
+│   ├── AutenticacaoHardware.{h,cpp} — talks to NTL Builtin (Embrace485) for auth
+│   ├── DadosHardware.{h,cpp}, GerenciadorGPIO.h, ComunicacaoNTLBuiltin.h
+├── DataHora/NTPUtil.{h,cpp}       — NTP sync + RTC write (sync-time)
+├── SistemaOperacional/
+│   ├── AtualizacaoSistema.{h,cpp} — RAUC OTA state machine
+│   └── IComandosServicos.h        — start/stop firmware service
+├── SistemaArquivos/SistemaArquivos.{h,cpp}
+├── ServiceLogs/ (subproject)      — logservice_{daemon,client,server,protocol}, observer pattern, LogEntry
+├── DriverGPIO/   (subproject)     — libgpio_client.so used by firmware too
+├── backend/ConfigWebAPI.h         — mongoose-based HTTPS API
+├── frontend/                      — Angular app, builds to /opt/monitor/www/
+├── Uteis/                         — Timers (GerenciadorTimer), AsyncREST, picojson, SafeThread
+├── tests/{unit,integration,helpers,stubs}/
+└── scripts/                       — extract-debug-symbols.sh, rauc-install.sh, setup-dev.sh
+```
+
+## Build matrix
+
+`ARCHITECTURE` env var selects the target. Buildroot host toolchain provides the cross-compile.
+
+| Build dir | `ARCHITECTURE` | `CMAKE_BUILD_TYPE` | Toolchain | Use |
+|---|---|---|---|---|
+| `build-x86` | X86 | Debug | `/opt/output-x86-full/host/share/buildroot/toolchainfile.cmake` | Local x86 dev |
+| `build-arm` | ARM | Debug | `/opt/output-arm/host/share/buildroot/toolchainfile.cmake` | Local ARM dev |
+| `build-overlay-x86` / `build-overlay-arm` | X86 / ARM | Release | same | Used by buildroot CI to seed `rootfs_overlay_rauc/home/scenario/embrace_monitor` |
+| `build-release` | X86 | Release | same | Standalone release builds |
+| `build-ci` | X86 | Debug + `BUILD_TESTS=ON` + `INTEGRATION_TESTS=ON` + `COVERAGE=ON` | x86 host | Used by `full-build.yml` PR check |
+| `build-test` | X86 | `BUILD_TESTS=ON` | x86 host | Local test runs |
+
+RPATH rules (set in `CMakeLists.txt`):
+- **Debug + X86 (overlay):** `${CMAKE_SYSROOT}/usr/lib;${CMAKE_SYSROOT}/lib` + `${CMAKE_BINARY_DIR}` so the binary finds Buildroot libs from the sysroot when run inside the overlay rootfs.
+- **Debug + ARM:** `/lib:/data/Firmware/lib:/usr/local/lib` — the on-device path layout.
+- **Release:** no explicit RPATH override; Buildroot's toolchain handles it.
+
+GNU build-id (`-Wl,--build-id=sha1`) is set globally → survives `strip` and identifies binaries from core dumps. See → `analyze-core-dump`.
+
+```bash
+# x86 debug
+ARCHITECTURE=X86 cmake -B build-x86 -DCMAKE_BUILD_TYPE=Debug \
+    -DCMAKE_TOOLCHAIN_FILE=/opt/output-x86-full/host/share/buildroot/toolchainfile.cmake
+cmake --build build-x86 -j$(nproc)
+
+# ARM debug
+ARCHITECTURE=ARM cmake -B build-arm -DCMAKE_BUILD_TYPE=Debug \
+    -DCMAKE_TOOLCHAIN_FILE=/opt/output-arm/host/share/buildroot/toolchainfile.cmake
+cmake --build build-arm -j$(nproc)
+
+# tests (x86)
+ARCHITECTURE=X86 cmake -B build-test -DBUILD_TESTS=ON -DINTEGRATION_TESTS=ON \
+    -DCMAKE_BUILD_TYPE=Debug \
+    -DCMAKE_TOOLCHAIN_FILE=/opt/output-x86-full/host/share/buildroot/toolchainfile.cmake
+cmake --build build-test
+ctest --test-dir build-test --output-on-failure
+```
+
+## Boot sequence (`main.cpp`)
+
+```cpp
+prctl(PR_SET_DUMPABLE, 1);   // CRITICAL: capsh's UID switch (cap_sys_time ambient) marks
+                              // the process non-dumpable; this re-enables core generation.
+signal(SIGINT,  shutdownHook);
+signal(SIGTERM, shutdownHook);
+signal(SIGTSTP, shutdownHook);
+signal(SIGABRT, crashHook);   // crashHook re-raises with SIG_DFL → guaranteed core dump
+GerenciadorGPIO::getInstance().init();
+WDTPulse::getInstance().init();
+MonitorHardware::getInstance();
+MonitorFirmware::getInstance().inicializar();
+```
+
+**`crashHook` for SIGABRT** is non-obvious: a normal `exit()` would prevent the kernel from writing the core. The hook does cleanup, then `signal(sig, SIG_DFL)` + `sigprocmask(SIG_UNBLOCK)` + `raise(sig)` so the default action runs and produces the core. The `_exit(EXIT_FAILURE)` is the unreachable belt-and-suspenders.
+
+`prctl(PR_SET_DUMPABLE, 1)` is **required** because `capsh` switches UID to grant `cap_sys_time` as an ambient capability for NTP sync; that switch normally marks the process non-dumpable even with `fs.suid_dumpable=2` set.
+
+GPIO LEDs driven during runtime: `LED5_LAN`, `LED4_RS_232`, `LED3_IR`, `LED2_RS485` (turned off on shutdown).
+
+## `MonitorFirmware` (the central singleton)
+
+Implements every external interface and owns every connection. Key on-device paths it manipulates:
+
+| Constant | Path |
+|---|---|
+| `ARQUIVO_EXECUTAVEL_APLICACAO` | `/Embrace2Application` (within the active firmware slot) |
+| `PASTA_LIB_FIRMWARE` | `/lib` |
+| `NOME_ARQUIVO_INFO_FIRMWARE` | `/info.ini` |
+| `NOME_ARQUIVO_CONFIGURACOES_FIRMWARE` | `/ConfiguracoesFirmware.scj` |
+| `DIRETORIO_CONFIGURACOES` | `/data/Configuracoes` |
+| `PASTA_FIRMWARE_A` | `/data/FirmwareA` |
+| `PASTA_FIRMWARE_B` | `/data/FirmwareB` |
+
+Timeouts:
+- `TEMPO_TIMEOUT_RECEBIMENTO_ARQUIVO_MILLIS = 30000` — file transfer from Config.
+- `LIMITE_SEGUNDOS_AJUSTE_HORARIO = 1` — clock-skew tolerance.
+- `TEMPO_TIMEOUT_LIMPEZA_EXECUCAO_GERAL_MILLIS = 5000` — `PEDIDO_LIMPEZA_EXECUCAO_GERAL` cap.
+- `DELAY_ESPERA_LIMPEZA_MILLIS = 100`.
+
+Holds observers for: firmware status, project info (name, online date, users connected), Day/Night module state (sunset/sunrise/adjusted/forced/operation/late-night).
+
+`IWorker` enforces a single requester at a time — `Requisitante::CONFIG` (0) or `FIRMWARE` (1). Used to serialize file transfers and procedures.
+
+## `WDTPulse` — hardware watchdog
+
+Pulses an external GPIO watchdog through `libgpiod` (only on ARM — x86 build-out via `#ifndef ARQUITETURA_X86`).
+
+- `WIDTH_PULSE_MILLISECONDS = 200` — pulse high width.
+- `WINDOW_WATCHDOG_TIME_MS = 30000` — must pulse within 30 s or external WDT trips.
+
+`init()` allocates a periodic timer through `Uteis/Timers/GerenciadorTimer` (the *monitor's* timer manager, not the firmware's `Core/GerenciadorTimer` — separate libraries). Logs WDT events through `ServiceLogs`.
+
+A WDT-triggered reset shows up as the device coming back up cold. Verify in `dmesg` (after reboot) and the most recent `/LOGS/embrace_monitor.log` entry — if the daemon was wedged, the last log line tells you which subsystem went silent.
+
+See HARDWARE.md §16 (hardware watchdog) for the kernel-level trip behavior.
+
+## Subsystems
+
+### `Hardware/`
+- **`MonitorHardware`** — sensor / thermal / throttling watcher; provides hardware data to the rest of the daemon.
+- **`AutenticacaoHardware`** — challenge/response with the NTL Builtin (Embrace485) at boot.
+- **`DadosHardware`** — cached hardware identifiers / serial.
+- **`GerenciadorGPIO`** — singleton wrapping libgpiod for LEDs + WDT line.
+- **`ComunicacaoNTLBuiltin`** — talks to the on-board NTL via Embrace485 protocol.
+- **`DebounceLeituraHardware`** — recent fix (CHANGELOG: hardware-data debounce).
+
+### `Firmware/`
+- **`ConexaoFirmware`** uses TCP and Unix socket (`UnixSocketServerChannel`) channels.
+  - `EstadoConexaoFirmware`: `DESCONECTADO` → `AGUARDANDO_CONECTAR` → `AGUARDANDO_PRIMEIRO_PING` → `CONEXAO_OK`.
+  - Ping loop: `TIMEOUT_PING_MILLIS = 10000`, `LIMITE_TENTATIVAS_PING = 3`.
+  - Errors `CodigoErroFirmware`: `TAMANHO_ARQUIVO_ZERO (0x01)`, `MD5_ARQUIVO (0x02)`, `ARQUIVO_INVALIDO (0x03)`, `CONFIG_OCUPADO (0x04)`, `TIMEOUT_PROCEDIMENTO (0x05)`, `DESCONHECIDO (0xFF)`.
+- **Commands** (`ComandosTCPFirmware`):
+
+| Code | Command | Purpose |
+|---|---|---|
+| 0x01 | `COMANDO_PEDIDO_PING` | Monitor → Firmware liveness probe |
+| 0x02 | `COMANDO_RESPOSTA_PING` | Firmware → Monitor response |
+| 0x03 | `PEDIDO_REINICIO_DO_FIRMWARE` | Restart Embrace2Application |
+| 0x04 | `PEDIDO_FINALIZACAO_FIRMWARE` | Stop Embrace2Application gracefully |
+| 0x05 | `INFORMAR_ERRO` | Firmware reports error code |
+| 0x06 | `INFORMAR_PROGRESSO` | Procedure progress |
+| 0x07 | `INFORMAR_PROCESSANDO` | Firmware busy notification |
+| 0x08–0x09 | `(RESPOSTA_)LIMPEZA_EXECUCAO_GERAL` | Reset state |
+| 0x0A | `BYPASS_COMANDO_CLOUD` | Forward Cloud-bound bytes |
+| 0x0B–0x0E | `INFORMAR_/RENOVAR_TOKEN_CLOUD`, `STATUS_/REPORTAR_ERRO_CONEXAO_CLOUD` | Cloud auth + status plumbing |
+| 0x0F | `ALTERACAO_STATUS_CONEXAO_CONFIG` | Config status update |
+| 0x10 | `BYPASS_COMANDO_CONFIG` | Forward Config-bound bytes |
+| 0x11–0x12 | `(RESPOSTA_)PEDIDO_VARREDURA_UDP_PROJETO` | UDP project discovery |
+
+### `ConexaoExterna/`
+- **`ConexaoConfig`** — TCP server for the Config desktop app.
+- **`ComandoTCP`**, **`ComunicacaoTCPTransferenciaArquivo`** — protocol decoder + chunked file uploader.
+- **`HTTPConfig`** — HTTP fallback / new flows.
+- **`UDPControladora`** — UDP discovery (Embrace UDP system).
+- **`EmbraceWebsocket`** + **`WebSocketClient`** — Cloud websocket; auto-reconnects on token renewal.
+- **`ComunicacaoCloud`** + **`AsyncREST`** — REST to cloud.
+- **`TokenCloud`** holds `(token, ws, expire)` with `getExpireTimePoint()` parsing ISO-8601. Persisted via `DAOTokenCloud`. `TokenRenewer` schedules renewal before expiry.
+- **`ZeroconfRegister`** — mDNS/Avahi discovery.
+
+### `DataHora/NTPUtil`
+Singleton. Periodic sync every `TEMPO_EXECUTA_NTPDATE_HORAS = 1` h (recently bumped per CHANGELOG) with `TEMPO_RETRY_NTPDATE_MIN = 5` min retry on failure. Calls `/usr/local/bin/sync-time` (a shipped wrapper). Writes the RTC after a successful sync.
+
+### `SistemaOperacional/AtualizacaoSistema`
+RAUC OTA state machine. States:
+
+```
+NAO_ESTA_EXECUTANDO →
+AGUARDANDO_RECEBIMENTO_ARQUIVO_LOCAL  | AGUARDANDO_ENVIO_ARQUIVO_SERVIDOR |
+AGUARDANDO_DOWNLOAD_ARQUIVO_SERVIDOR  | AGUARDANDO_RECEBIMENTO_ARQUIVO_PROTOCOLO →
+VERIFICACAO_ARQUIVO_SISTEMA →
+EXECUTAR_INSTALADOR_SISTEMA →
+REINICIANDO_SISTEMA
+```
+
+Final installation invokes `scripts/rauc-install.sh` on the device, which calls `rauc install <bundle.raucb>`, then GRUB env updates rotate `ORDER` for the new slot. Rollback on next-boot failure is automatic via `rootfsX_TRY` + threshold.
+
+### `ServiceLogs/`
+Daemon + client library + protocol + observer manager. Logs from `MonitorFirmware` and friends go through `logservice_client.cpp` → daemon (`logservice_daemon.cpp`) which writes to `/LOGS/...` files and notifies registered observers (`observer_manager.cpp`). The frontend reads via `result_set_logs.cpp`. See `AC3_Docs/docs/Logs/especificacaoE2/SPEC_*.md` for the design.
+
+### `backend/ConfigWebAPI`
+Mongoose-based HTTPS server. Serves the Angular frontend from `/opt/monitor/www/`, exposes `/api/*` and `/firmware/*` endpoints, bearer-token auth, and special icon serving from `/opt/monitor/www/assets/icons/` (auto-extension `.png` then `.svg`).
+
+## Hardware-aware coding
+
+Always cross-check against `AC3_Docs/docs/Hardware/HARDWARE.md` when changing memory, threading, or I/O patterns:
+
+- §7 **No swap** — every allocation is "real"; OOM-killer is the only relief.
+- §8 **OOM policy** — see how the kernel picks victims; tune `oom_score_adj` if needed.
+- §11 **Process / thread limits** — careful with thread pools.
+- §12 **Stack size** — default 8 MB but pthread default is 8 MB on x86, 2 MB on ARM glibc; check before nesting recursion.
+- §13 **fd limits** — sockets + file transfers + Unix sockets all consume fds.
+- §14 **Real-time scheduling** — only WDT thread should consider RT priority.
+- §16 **Hardware watchdog** — pulse window is 30 s; missing it reboots the board cold.
+- §18 **Thermal trip** — performance throttling kicks in.
+- §22 **Kernel panic policy** — panics reboot.
+- §23 **Core dumps** — `kernel.core_pattern`, `fs.suid_dumpable=2`, and the `prctl(PR_SET_DUMPABLE, 1)` quirk.
+
+## Debug ladder for hangs / freezes / WDT trips
+
+EmbraceOS has **no journalctl**. Walk in order:
+
+1. **`dmesg | tail -200`** on the device — kernel side: WDT trip ("watchdog: BUG"), OOM kills ("Killed process"), thermal trip, NIC reset.
+2. **Latest `/LOGS/embrace_monitor.log`** + `/LOGS/firmware_embrace.log` — last entry tells you which thread/subsystem went silent.
+3. **If a core was produced** — `/data/coredumps/core.<exe>.<pid>.<sig>.<ts>` → → `analyze-core-dump`.
+4. **`/LOGS/debugDispatcher.txt`** if the firmware is in the path — slow handlers / queue overflows (see → `firmware-module-communication`).
+5. **Thread state** — if you have shell access, inspect `/proc/<pid>/task/*/wchan` and `status` to see who's blocked where.
+6. **Specific symptoms:**
+   - **Long-uptime hang** (CHANGELOG 2025-11-24): start with WDT trip in `dmesg`; cross-reference last `MonitorFirmware` log entry; check WDT thread RT priority and pulse cadence.
+   - **Network instability when ethernet unplugged** (CHANGELOG): inspect `ConexaoCloud` reconnect loop; `EmbraceWebsocket` should backoff, not spin.
+   - **Cloud token renewal failures** — read `TokenCloud` state file, check NTP correctness (an off-clock breaks JWT verification), check `TokenRenewer` logs.
+   - **Hardware auth fails** — `AutenticacaoHardware` + `ComunicacaoNTLBuiltin`; check NTL Builtin presence (`/dev/...` USB? Embrace485 line?).
+   - **Embrace2Application won't start** — check `MonitorFirmware` `EstadoConexaoFirmware`, `/data/FirmwareA|B/<active>/Embrace2Application` exists, deps in `/data/FirmwareA|B/<active>/lib/`.
+
+## Common failure cookbook
+
+| Symptom | First check |
+|---|---|
+| Daemon won't start at boot | `prctl(PR_SET_DUMPABLE, 1)` present? `capsh` failing on `cap_sys_time`? Run interactively: `embrace_monitor` |
+| WDT reboots | dmesg + last log entry; verify `WDTPulse::init()` succeeded; LED5_LAN blink alive? |
+| Firmware never reaches `CONEXAO_OK` | TCP/Unix socket bound? Embrace2Application running? Ping reaches it? `LIMITE_TENTATIVAS_PING = 3` × 10 s |
+| Config TCP "busy" | Another `IWorker::Requisitante` already in flight (CONFIG vs FIRMWARE) — check ongoing transfer |
+| Cloud WS reconnect loop | NTP correctness, expired token (`TokenCloud::getExpireTimePoint()`), DNS resolves? |
+| RAUC install hangs | `AtualizacaoSistema` state stuck in `EXECUTAR_INSTALADOR_SISTEMA` — read `rauc.log`, `grubenv` state |
+| Frontend 500s | `/opt/monitor/www/` empty? `mongoose` initialized? bearer token wrong? |
+| Disk full warning never clears | `ExecutorLimpezaDisco::executarLimpezaDisco` not making progress; `/LOGS/`, `/data/coredumps/` accumulating |
+| NTP off | `/usr/local/bin/sync-time` exits non-zero; cap_sys_time missing; check `capsh` ambient set |
+| Logs missing in frontend | ServiceLogs daemon not running; `logservice_main` died — check `/LOGS/logservice.log` |
+| Core dump never produced on crash | `kernel.core_pattern`, `fs.suid_dumpable=2`, `prctl(PR_SET_DUMPABLE, 1)` — see HARDWARE.md §23 |
+
+## Cross-references
+
+- → `embrace-buildroot` for how the monitor binary ends up in `rootfs_overlay_rauc/home/scenario/`, the host toolchain, and RAUC OTA glue.
+- → `embrace-firmware` for the Embrace2Application side of `ConexaoFirmware`.
+- → `firmware-module-communication` if `ConexaoFirmware` issues turn out to be firmware-internal (dispatcher hung, etc.).
+- → `analyze-core-dump` whenever a core is involved.
+- → `embrace-docs` after architecture / protocol / lifecycle changes — specifically `Embrace2/Monitor de Sistema Embrace2.md` and `Embrace2/Protocolos/Protocolo Monitor e Firmware.md`.
+- `AC3_Docs/docs/Hardware/HARDWARE.md` — primary hardware constraints reference.
+- `AC3_Docs/docs/Logs/especificacaoE2/SPEC_*.md` — ServiceLogs design.
