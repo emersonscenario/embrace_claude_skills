@@ -18,96 +18,55 @@ Seven Claude Code skills that capture the EmbraceOS ecosystem (Buildroot OS imag
 
 "Auto" = Claude reads each skill's `description` at session start and decides per turn whether to load the body. "Manual only" = wait for explicit `/skill-name` invocation.
 
-## Prerequisites — local paths the skills assume
+## Path configuration
 
-The skills reference concrete paths. Match the team layout or the recipes won't work:
+The skills are templates rendered to literal paths at install time. The team
+defaults live in `paths.defaults.conf` (committed). To use a different layout,
+copy `paths.conf.example` to `~/.config/embrace-skills/paths.conf` (or
+`<repo>/paths.local.conf`) and uncomment the variables you want to override —
+unset variables inherit from the defaults.
 
-| Path | What's there |
-|---|---|
-| `/opt/my-buildroot/` | Buildroot external tree |
-| `/opt/output-x86-full/`, `/opt/output-x86-pro/`, `/opt/output-arm/` | Buildroot output dirs (host toolchain + sysroot) |
-| `~/Projects/monitor/` | `embrace_monitor` repo |
-| `~/Projects/aplicacao_ac/` | `embrace2` firmware repo |
-| `~/IdeaProjects/AC3_Docs/` | MkDocs docs repo |
-| `~/Embrace2/` | Release artifact dir (xmhx3, xshx3, Versionamento state) |
-| `~/Embrace2_debug/` | Debug bundles (per-version + `.debug-registry.json`) |
-| `~/Documentos/Recursos Embrace2/analisa-coredump.sh` | Core-dump analyzer script |
-| `~/Projects/deploy-ac3/` | Java tool with the core-dump module-listing service |
-| `192.168.10.66` (Banana Pi default) | Override per-call: `./deploy.sh <ip>` |
+| Variable | Default | What it points to |
+|---|---|---|
+| `BUILDROOT_DIR` | `/opt/my-buildroot` | Buildroot external tree |
+| `BUILDROOT_OUT_X86_FULL` | `/opt/output-x86-full` | x86 full output dir |
+| `BUILDROOT_OUT_X86_PRO`  | `/opt/output-x86-pro`  | x86 pro output dir |
+| `BUILDROOT_OUT_ARM`      | `/opt/output-arm`      | ARM output dir |
+| `MONITOR_DIR`            | `~/Projects/monitor`        | `embrace_monitor` repo |
+| `FIRMWARE_DIR`           | `~/Projects/aplicacao_ac`   | `embrace2` firmware repo |
+| `DEPLOY_AC3_DIR`         | `~/Projects/deploy-ac3`     | Deploy tool repo |
+| `DOCS_DIR`               | `~/IdeaProjects/AC3_Docs`   | MkDocs docs repo |
+| `EMBRACE2_DIR`           | `~/Embrace2`                | Release artefact dir |
+| `EMBRACE2_DEBUG_DIR`     | `~/Embrace2_debug`          | Debug bundles dir |
+| `RECURSOS_DIR`           | `~/Documentos/Recursos Embrace2` | Banana Pi base image + provisioning output |
 
-If your machine uses different paths, either (a) normalize to the team layout, or (b) keep a personal fork of these skills with paths sed-replaced.
+The device IP is **not configured here.** Skills that need device access prompt
+for `<DEVICE_IP>` per invocation; if you don't supply one, the skill halts.
 
 ## Install
-
-Clone URLs:
-
-- SSH (recommended for contributors): `git@github.com:emersonscenario/embrace_claude_skills.git`
-- HTTPS (read-only / no SSH key): `https://github.com/emersonscenario/embrace_claude_skills.git`
-
-The clone target dir name is up to you — examples below use `~/Projects/embrace-skills`. The directory name doesn't have to match the GitHub repo name.
-
-### Option 1 — Global (recommended)
-
-Every skill is available in every Claude Code session, regardless of `cwd`. Best for full-stack contributors who touch all four repos.
 
 ```bash
 # Clone once
 git clone git@github.com:emersonscenario/embrace_claude_skills.git ~/Projects/embrace-skills
+cd ~/Projects/embrace-skills
 
-# Symlink every skill into your personal Claude Code skills dir
-mkdir -p ~/.claude/skills
-for d in ~/Projects/embrace-skills/*/; do
-    [ -f "$d/SKILL.md" ] || continue   # skip .git and any non-skill dirs
-    ln -sfn "$d" ~/.claude/skills/"$(basename "$d")"
-done
+# (optional) override paths
+mkdir -p ~/.config/embrace-skills
+cp paths.conf.example ~/.config/embrace-skills/paths.conf
+$EDITOR ~/.config/embrace-skills/paths.conf
+
+# install (default: global mode)
+./install.sh
 ```
 
-After this, `git pull` in `~/Projects/embrace-skills` updates everyone's symlinks instantly — no relink step.
+Modes:
 
-### Option 2 — Per-repo (scope skills to one project)
-
-Each repo gets only its relevant skills, dropped into its `.claude/skills/`. Skills auto-load only when `claude` runs from inside that repo's tree. Best for contributors who only work on one component.
-
-```bash
-git clone git@github.com:emersonscenario/embrace_claude_skills.git ~/Projects/embrace-skills
-
-# Buildroot only
-mkdir -p /opt/my-buildroot/.claude/skills
-for s in embrace-buildroot analyze-core-dump embrace-docs; do
-    ln -sfn ~/Projects/embrace-skills/$s /opt/my-buildroot/.claude/skills/$s
-done
-
-# Monitor only
-mkdir -p ~/Projects/monitor/.claude/skills
-for s in embrace-monitor analyze-core-dump embrace-docs; do
-    ln -sfn ~/Projects/embrace-skills/$s ~/Projects/monitor/.claude/skills/$s
-done
-
-# Firmware only
-mkdir -p ~/Projects/aplicacao_ac/.claude/skills
-for s in embrace-firmware add-firmware-module firmware-module-communication analyze-core-dump embrace-docs; do
-    ln -sfn ~/Projects/embrace-skills/$s ~/Projects/aplicacao_ac/.claude/skills/$s
-done
-
-# Docs only
-mkdir -p ~/IdeaProjects/AC3_Docs/.claude/skills
-ln -sfn ~/Projects/embrace-skills/embrace-docs ~/IdeaProjects/AC3_Docs/.claude/skills/embrace-docs
-```
-
-Add `.claude/skills/` to each repo's `.gitignore` if you don't want the symlinks committed (they're machine-local).
-
-### Option 3 — Selective global
-
-Pick a subset of skills and symlink only those into `~/.claude/skills/`. Useful if a teammate only wants, say, `analyze-core-dump` and `embrace-docs` without seeing the firmware/monitor/buildroot mega-skills in their session start.
-
-```bash
-git clone git@github.com:emersonscenario/embrace_claude_skills.git ~/Projects/embrace-skills
-mkdir -p ~/.claude/skills
-
-for s in analyze-core-dump embrace-docs; do
-    ln -sfn ~/Projects/embrace-skills/$s ~/.claude/skills/$s
-done
-```
+- `./install.sh --mode=global` (default) — symlinks every rendered skill into `~/.claude/skills/`. Best for full-stack contributors.
+- `./install.sh --mode=per-repo` — symlinks scoped subsets into each target repo's `.claude/skills/`:
+  - `$BUILDROOT_DIR/.claude/skills/`: `embrace-buildroot`, `analyze-core-dump`, `embrace-docs`
+  - `$MONITOR_DIR/.claude/skills/`: `embrace-monitor`, `analyze-core-dump`, `embrace-docs`
+  - `$FIRMWARE_DIR/.claude/skills/`: `embrace-firmware`, `add-firmware-module`, `firmware-module-communication`, `analyze-core-dump`, `embrace-docs`
+  - `$DOCS_DIR/.claude/skills/`: `embrace-docs`
 
 ## Verify
 
@@ -150,21 +109,20 @@ Manual invocation with `/skill-name` overrides this and forces a specific skill 
 ```bash
 cd ~/Projects/embrace-skills
 git pull
+./install.sh --render-only
 ```
 
-Symlinks resolve through the repo, so the next Claude Code session picks up the changes. No re-symlink needed.
-
-If you've added new skills since the last sync, re-run the symlink loop from your install option to pick them up.
+If you edited `~/.config/embrace-skills/paths.conf`, run `./install.sh --reconfigure` instead — same effect, clearer in command history.
 
 ## Uninstall
 
 ```bash
-# Global
-find ~/.claude/skills -maxdepth 1 -type l -lname '*embrace-skills*' -delete
-
-# Per-repo
-find <repo>/.claude/skills -maxdepth 1 -type l -lname '*embrace-skills*' -delete
+cd ~/Projects/embrace-skills
+./uninstall.sh                  # default: global
+./uninstall.sh --mode=per-repo  # if you installed with --mode=per-repo
 ```
+
+This only removes symlinks pointing at `.rendered/` under this repo — unrelated symlinks in `~/.claude/skills/` are left alone.
 
 ## Contributing
 
