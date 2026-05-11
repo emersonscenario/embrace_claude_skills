@@ -1,6 +1,6 @@
 ---
 name: embrace-firmware
-description: Use when working in ~/Projects/aplicacao_ac/ or on the embrace2 firmware (Embrace2Application). Covers the Core/Dispatcher plugin model, the per-module triplet (connectors, timers, modular payload), Ambiente / Cena / RoomControl, lighting / climate / curtain / keypad / sensor / load / logic / wifi-device modules, the Bibliotecas/ library layer (NTL, RF, Zigbee, ESP32, Embrace485, Serial, IR, AudioVideo, ControladorConexao, KeypadsEmbrace, ModuloDePotencia, ModulosBasicos, ModuloSetup, DispositivoWifi), deploy.sh + deploy.conf workflow to /data/Firmware/ (debug-only) vs A/B production slots, version files, smart logs, and runtime debugging on the Banana Pi (no swap, OOM, hardware watchdog, no journalctl, HARDWARE.md as primary reference). For a new module see add-firmware-module; for inter-module dispatch see firmware-module-communication; for crashes see analyze-core-dump.
+description: Use when working in {{FIRMWARE_DIR}}/ or on the embrace2 firmware (Embrace2Application). Covers the Core/Dispatcher plugin model, the per-module triplet (connectors, timers, modular payload), Ambiente / Cena / RoomControl, lighting / climate / curtain / keypad / sensor / load / logic / wifi-device modules, the Bibliotecas/ library layer (NTL, RF, Zigbee, ESP32, Embrace485, Serial, IR, AudioVideo, ControladorConexao, KeypadsEmbrace, ModuloDePotencia, ModulosBasicos, ModuloSetup, DispositivoWifi), deploy.sh + deploy.conf workflow to /data/Firmware/ (debug-only) vs A/B production slots, version files, smart logs, and runtime debugging on the Banana Pi (no swap, OOM, hardware watchdog, no journalctl, HARDWARE.md as primary reference). For a new module see add-firmware-module; for inter-module dispatch see firmware-module-communication; for crashes see analyze-core-dump.
 ---
 
 # embrace-firmware
@@ -9,12 +9,14 @@ description: Use when working in ~/Projects/aplicacao_ac/ or on the embrace2 fir
 
 `Embrace2Application` is the user-facing firmware running on EmbraceOS (`/data/FirmwareA|B/Embrace2Application` in production, `/data/Firmware/Embrace2Application` in debug pushes). C++20, dynamic plugin architecture: each *module* is a `.so` library declared in the root `CMakeLists.txt` and loaded at runtime by `Core/`. Modules represent devices (lamps, AC, sensors, keypads, NTL devices, etc.), logic operators (AND/OR/NOT/timers), or environment-level concepts (Ambiente, Cena, RoomControl).
 
-EmbraceOS has **no journalctl** — use `dmesg` + smart logs in `/LOGS/firmware_embrace.log` + dispatcher black box at `/LOGS/debugDispatcher.txt` + core dumps. The Banana Pi target's hardware constraints (no swap, OOM, fd / stack / thread caps, hardware watchdog, thermal trip) live in `~/IdeaProjects/AC3_Docs/docs/Hardware/HARDWARE.md` and govern any non-trivial change.
+EmbraceOS has **no journalctl** — use `dmesg` + smart logs in `/LOGS/firmware_embrace.log` + dispatcher black box at `/LOGS/debugDispatcher.txt` + core dumps. The Banana Pi target's hardware constraints (no swap, OOM, fd / stack / thread caps, hardware watchdog, thermal trip) live in `{{DOCS_DIR}}/docs/Hardware/HARDWARE.md` and govern any non-trivial change.
+
+> **Device IP:** This skill never assumes a default IP. When device access is required, ask the user for `<DEVICE_IP>` and halt if they don't provide one.
 
 ## Layout
 
 ```
-~/Projects/aplicacao_ac/
+{{FIRMWARE_DIR}}/
 ├── main.cpp                — bootstrap, loads Core, instantiates modules from Projeto.db
 ├── CMakeLists.txt          — root; declares every module as add_library(<Name> SHARED ...)
 ├── Core/                   — runtime engine (see firmware-module-communication for details)
@@ -39,24 +41,24 @@ EmbraceOS has **no journalctl** — use `dmesg` + smart logs in `/LOGS/firmware_
 # ARM (Banana Pi)
 ARCHITECTURE=ARM cmake -B cmake-build-debug-banana \
     -DCMAKE_BUILD_TYPE=Debug \
-    -DCMAKE_TOOLCHAIN_FILE=/opt/output-arm/host/share/buildroot/toolchainfile.cmake
+    -DCMAKE_TOOLCHAIN_FILE={{BUILDROOT_OUT_ARM}}/host/share/buildroot/toolchainfile.cmake
 cmake --build cmake-build-debug-banana -j$(nproc)
 
 # x86 (Pro / Full controller)
 ARCHITECTURE=X86 cmake -B build-x86 \
     -DCMAKE_BUILD_TYPE=Debug \
-    -DCMAKE_TOOLCHAIN_FILE=/opt/output-x86-full/host/share/buildroot/toolchainfile.cmake
+    -DCMAKE_TOOLCHAIN_FILE={{BUILDROOT_OUT_X86_FULL}}/host/share/buildroot/toolchainfile.cmake
 cmake --build build-x86 -j$(nproc)
 
 # Tests (with optional integration)
 ARCHITECTURE=X86 cmake -B build-test \
     -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTS=ON -DCOVERAGE=ON \
-    -DCMAKE_TOOLCHAIN_FILE=/opt/output-x86-full/host/share/buildroot/toolchainfile.cmake
+    -DCMAKE_TOOLCHAIN_FILE={{BUILDROOT_OUT_X86_FULL}}/host/share/buildroot/toolchainfile.cmake
 cmake --build build-test
 ctest --test-dir build-test --output-on-failure
 
 # Release packaging
-./scripts/local-release.sh         # produces .xshx3 in ~/Embrace2/
+./scripts/local-release.sh         # produces .xshx3 in {{EMBRACE2_DIR}}/
 ```
 
 `ARCHITECTURE` accepts `ARM`, `X86`, `x86Full`. Debug builds set `DEBUG_MODE_SCENARIO`. Release uses `-O2 -g -DNDEBUG` (ARM additionally `-mcpu=cortex-a7 -mfloat-abi=hard -mfpu=neon-vfpv4`). RPATH for ARM debug: `/lib:/data/Firmware/lib:/usr/local/lib`.
@@ -79,7 +81,7 @@ Project (Projeto.db) follows the **same A/B pattern**: `/data/ProjetoA/` ↔ `/d
 
 `deploy.sh` defaults (from `deploy.conf`):
 ```
-REMOTE_HOST=192.168.10.66
+REMOTE_HOST=<DEVICE_IP>
 REMOTE_USER=scenario
 REMOTE_DIR=/data/Firmware       # debug-only path
 BUILD_DIR=cmake-build-debug-banana
@@ -89,7 +91,7 @@ DEPLOY_TMP=/tmp/deploy-embrace2
 
 The script: build → `DESTDIR=$DEPLOY_TMP cmake --install` → rsync `$DEPLOY_TMP$REMOTE_DIR` → `$REMOTE:$REMOTE_DIR`. On `Stop` (CLion trap) it kills the remote `Embrace2Application` over SSH (`killall -15`).
 
-Override host: `./deploy.sh 192.168.10.42`.
+Override host: `./deploy.sh <DEVICE_IP>`.
 
 ## Module taxonomy
 
@@ -139,11 +141,11 @@ When deciding library vs module: **2+ modules use this code → library**.
 
 - **Firmware version:** `Core/FirmwareVersion.h` (`FIRMWARE_MAJOR_VERSION`, `_MINOR_`, `_PATCH_`). Currently `2.0.0`. Changes here imply a release boundary; CHANGELOG should follow.
 - **Per-module version:** each module has `<Name>Version.h` with `<NAME>_MAJOR/MINOR/PATCH_VERSION` plus `<NAME>_MINIMUM_FIRMWARE_VERSION` (the lowest firmware that loads it). Bump the module version on behavior changes; bump `MINIMUM_FIRMWARE_VERSION` only when a new firmware capability is required.
-- **Release script:** `Versionamento/...` and `local-release.sh` produce versioned `.xshx3` artifacts under `~/Embrace2/` (e.g., `EB-AC_v<X.Y.Z.W>_Slim.xshx3` for ARM, `EB-AC_v<X.Y.Z.W>_Full_Pro.xshx3` for x86). The buildroot CI consumes these to seed `FirmwareA/B`.
+- **Release script:** `Versionamento/...` and `local-release.sh` produce versioned `.xshx3` artifacts under `{{EMBRACE2_DIR}}/` (e.g., `EB-AC_v<X.Y.Z.W>_Slim.xshx3` for ARM, `EB-AC_v<X.Y.Z.W>_Full_Pro.xshx3` for x86). The buildroot CI consumes these to seed `FirmwareA/B`.
 
 ## Logs
 
-The firmware uses a structured log format (see `~/Projects/monitor/ServiceLogs/LogEntry.h` for the wire shape). Two source-of-truth catalogs:
+The firmware uses a structured log format (see `{{MONITOR_DIR}}/ServiceLogs/LogEntry.h` for the wire shape). Two source-of-truth catalogs:
 
 - **`docs/log_i18n_keys.md`** — every `i18n_key` (e.g., `log.keypad.button.state_changed`), its JSON `params` schema, the category, and the insertion point. Frontend renders translated messages from these keys; **never log English strings, always log a key + params**.
 - **`docs/logs_inteligentes_por_modulo.md`** — per-module trigger map: which event → which level (debug/info/warning/error) → which key.
@@ -251,7 +253,7 @@ When debugging, **check git log of the suspected module** for recent commits —
 | NTL devices unresponsive | `EmbraceNTL*` module + `Bibliotecas/NTL/` queue state; check `/LOGS/firmware_embrace.log` for NTL-category errors. |
 | RF curtain / keypad unresponsive | `Bibliotecas/RF/` + the RF driver module; check the RF link state in logs. |
 | Smart log shows raw key in UI | Forgot to add the key to `docs/log_i18n_keys.md` (or i18n bundle in frontend). |
-| `.xshx3` package missing files | `local-release.sh` failed; check `gerarXSHX3.sh` output and `~/Embrace2/EB-AC_v*` artifacts. |
+| `.xshx3` package missing files | `local-release.sh` failed; check `gerarXSHX3.sh` output and `{{EMBRACE2_DIR}}/EB-AC_v*` artifacts. |
 | Dispatcher dumps to `/LOGS/debugDispatcher.txt` repeatedly | A handler is taking >100 ms — find the destination column in the dump; profile that module. |
 | Core dump on the firmware side | → `analyze-core-dump`. |
 
@@ -265,4 +267,4 @@ When debugging, **check git log of the suspected module** for recent commits —
 - → `embrace-docs` to update `Embrace2/Modulos/` after module changes and `Embrace2/Protocolos/Protocolo Comunicação Modular.md` after protocol changes.
 - `AC3_Docs/docs/Hardware/HARDWARE.md` — primary hardware constraint reference (no swap, OOM, WDT, thermal).
 - `AC3_Docs/docs/Logs/especificacaoE2/SPEC_*.md` — log system design.
-- Source of truth: `~/Projects/aplicacao_ac/Core/`, `~/Projects/aplicacao_ac/CMakeLists.txt`, `~/Projects/aplicacao_ac/docs/log_i18n_keys.md`, `~/Projects/aplicacao_ac/docs/logs_inteligentes_por_modulo.md`.
+- Source of truth: `{{FIRMWARE_DIR}}/Core/`, `{{FIRMWARE_DIR}}/CMakeLists.txt`, `{{FIRMWARE_DIR}}/docs/log_i18n_keys.md`, `{{FIRMWARE_DIR}}/docs/logs_inteligentes_por_modulo.md`.
