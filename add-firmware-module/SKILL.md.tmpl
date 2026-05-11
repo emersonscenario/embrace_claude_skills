@@ -1,6 +1,6 @@
 ---
 name: add-firmware-module
-description: Use when adding a new firmware module (or library under Bibliotecas/) to ~/Projects/aplicacao_ac/. Covers picking the right category (project module vs firmware/driver module vs library), file scaffold (Module.h/.cpp, ModuleVersion.h, DAOModule.h/.cpp, GeradorHandlersModule.h, UtilsModule.h with IDs enum), CMake registration with add_library + install destination, the per-module triplet (connectors, timers, modular payload), Logs i18n keys, deploy.sh push, test scaffold, and AC3_Docs entry.
+description: Use when adding a new firmware module (or library under Bibliotecas/) to {{FIRMWARE_DIR}}/. Covers picking the right category (project module vs firmware/driver module vs library), file scaffold (Module.h/.cpp, ModuleVersion.h, DAOModule.h/.cpp, GeradorHandlersModule.h, UtilsModule.h with IDs enum), CMake registration with add_library + install destination, the per-module triplet (connectors, timers, modular payload), Logs i18n keys, deploy.sh push, test scaffold, and AC3_Docs entry.
 ---
 
 # add-firmware-module
@@ -217,14 +217,14 @@ install(TARGETS Foo LIBRARY DESTINATION ${DESTINO_MODULOS_PROJETO}/Foo/)
 
 If the module emits events worth logging:
 
-1. **Reserve i18n keys** in `~/Projects/aplicacao_ac/docs/log_i18n_keys.md` — append to the index table (`log.foo.<event>`), then add a per-key section with the JSON `params` schema and the insertion point in the code.
-2. **Smart-logs catalog** — add a row to `~/Projects/aplicacao_ac/docs/logs_inteligentes_por_modulo.md` describing what triggers what level (debug/info/warning/error).
+1. **Reserve i18n keys** in `{{FIRMWARE_DIR}}/docs/log_i18n_keys.md` — append to the index table (`log.foo.<event>`), then add a per-key section with the JSON `params` schema and the insertion point in the code.
+2. **Smart-logs catalog** — add a row to `{{FIRMWARE_DIR}}/docs/logs_inteligentes_por_modulo.md` describing what triggers what level (debug/info/warning/error).
 3. Use the existing `Logger`/`LoggerFirmware` API in `Foo.cpp`. Don't roll your own logging.
 
 ## Step 5 — Build + deploy (debug)
 
 ```bash
-cd ~/Projects/aplicacao_ac
+cd {{FIRMWARE_DIR}}
 ARCHITECTURE=ARM cmake -B cmake-build-debug-banana -DCMAKE_BUILD_TYPE=Debug
 cmake --build cmake-build-debug-banana -j$(nproc) --target Foo
 
@@ -255,7 +255,7 @@ ctest --test-dir build-test --output-on-failure
 Add a page describing what the module does, its connectors, and any user-visible config:
 
 ```
-~/IdeaProjects/AC3_Docs/docs/Embrace2/Modulos/Foo.md
+{{DOCS_DIR}}/docs/Embrace2/Modulos/Foo.md
 ```
 
 Then add it to `mkdocs.yml` `nav:` under the matching category in `Embrace2 → Modulos → ...`. If you'd rather batch the docs work, defer it and run → `embrace-docs` later.
