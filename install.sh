@@ -92,9 +92,29 @@ case "$MODE" in
         echo "Linked ${#SKILLS[@]} skill(s) into $TARGET_DIR"
         ;;
     per-repo)
-        # Task 6 fills this in.
-        echo "install.sh: --mode=per-repo not yet implemented" >&2
-        exit 1
+        # mapping: <target_var>=<space-separated skill list>
+        declare -A PER_REPO_MAP=(
+            [BUILDROOT_DIR]="embrace-buildroot analyze-core-dump embrace-docs"
+            [MONITOR_DIR]="embrace-monitor analyze-core-dump embrace-docs"
+            [FIRMWARE_DIR]="embrace-firmware add-firmware-module firmware-module-communication analyze-core-dump embrace-docs"
+            [DOCS_DIR]="embrace-docs"
+        )
+        for target_var in "${!PER_REPO_MAP[@]}"; do
+            target_root="${!target_var}"
+            if [ ! -d "$target_root" ]; then
+                echo "install.sh: skipping $target_var=$target_root (not a directory)" >&2
+                continue
+            fi
+            mkdir -p "$target_root/.claude/skills"
+            for skill in ${PER_REPO_MAP[$target_var]}; do
+                if [ ! -d "$REPO/.rendered/$skill" ]; then
+                    echo "install.sh: skipping $skill (not rendered)" >&2
+                    continue
+                fi
+                ln -sfn "$REPO/.rendered/$skill" "$target_root/.claude/skills/$skill"
+            done
+        done
+        echo "Per-repo symlinks installed under: BUILDROOT_DIR, MONITOR_DIR, FIRMWARE_DIR, DOCS_DIR"
         ;;
     *)
         echo "install.sh: unknown mode: $MODE" >&2
