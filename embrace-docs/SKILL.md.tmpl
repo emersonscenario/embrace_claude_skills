@@ -1,20 +1,20 @@
 ---
 name: embrace-docs
-description: Use when the user explicitly invokes /embrace-docs or asks to sync the AC3_Docs MkDocs site after committing changes in /opt/my-buildroot/, ~/Projects/monitor/, or ~/Projects/aplicacao_ac/. Manual trigger only — never auto-fire on adjacent doc-related tasks during normal coding.
+description: Use when the user explicitly invokes /embrace-docs or asks to sync the AC3_Docs MkDocs site after committing changes in {{BUILDROOT_DIR}}/, {{MONITOR_DIR}}/, or {{FIRMWARE_DIR}}/. Manual trigger only — never auto-fire on adjacent doc-related tasks during normal coding.
 ---
 
 # embrace-docs
 
 ## Overview
 
-Manual sync skill for the EmbraceOS documentation site at `~/IdeaProjects/AC3_Docs/` (MkDocs Material, hosted at `https://scenario1733514.gitlab.io/AC3_Docs/`). Diffs recent commits across the three source repos, proposes targeted edits, and updates `mkdocs.yml` nav when new pages are added.
+Manual sync skill for the EmbraceOS documentation site at `{{DOCS_DIR}}/` (MkDocs Material, hosted at `https://scenario1733514.gitlab.io/AC3_Docs/`). Diffs recent commits across the three source repos, proposes targeted edits, and updates `mkdocs.yml` nav when new pages are added.
 
 **Manual only.** Wait for an explicit invocation. Do NOT fire on commits in nearby coding sessions.
 
 ## When to use
 
 - User invokes `/embrace-docs` or says "sync docs", "update the docs", "atualiza a documentação".
-- Recent commits in `/opt/my-buildroot/`, `~/Projects/monitor/`, or `~/Projects/aplicacao_ac/` introduced behavior, architecture, or protocol changes.
+- Recent commits in `{{BUILDROOT_DIR}}/`, `{{MONITOR_DIR}}/`, or `{{FIRMWARE_DIR}}/` introduced behavior, architecture, or protocol changes.
 
 When NOT to use:
 - Normal coding sessions, even when touching files documented in AC3_Docs.
@@ -26,9 +26,9 @@ When NOT to use:
 1. **Range.** Default = "since the last AC3_Docs commit". Otherwise ask the user for a commit range, branch, or "the last N commits".
 2. **Diff the 3 repos** for the range:
    ```bash
-   git -C /opt/my-buildroot              log --oneline <range>
-   git -C ~/Projects/monitor             log --oneline <range>
-   git -C ~/Projects/aplicacao_ac        log --oneline <range>
+   git -C {{BUILDROOT_DIR}}              log --oneline <range>
+   git -C {{MONITOR_DIR}}                log --oneline <range>
+   git -C {{FIRMWARE_DIR}}               log --oneline <range>
    ```
 3. **Categorize each commit** by its conventional prefix:
 
