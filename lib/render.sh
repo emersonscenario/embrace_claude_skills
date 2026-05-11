@@ -12,7 +12,7 @@ render_file() {
 
     # Find all distinct {{VAR}} tokens and substitute each with $VAR.
     local tokens
-    tokens=$(printf '%s' "$content" | grep -oE '\{\{[A-Z_]+\}\}' | sort -u || true)
+    tokens=$(printf '%s' "$content" | grep -oE '\{\{[A-Z0-9_]+\}\}' | sort -u || true)
 
     local token name value
     for token in $tokens; do

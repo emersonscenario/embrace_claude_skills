@@ -1,6 +1,6 @@
 ---
 name: analyze-core-dump
-description: Use when an Embrace2 controller produced a core dump and needs analysis — symptoms include "Monitor crashed on the device", "I have a /data/coredumps/core.<exe>.<pid>.<sig>.<ts> file", "controller restarted unexpectedly with a coredump", or "produce a backtrace for review". Covers fetching the core, generating a module listing of running binaries, matching build-ids against ~/Embrace2_debug/.../.debug-registry.json, building a mapping dir, and running ~/Documentos/Recursos\ Embrace2/analisa-coredump.sh.
+description: Use when an Embrace2 controller produced a core dump and needs analysis — symptoms include "Monitor crashed on the device", "I have a /data/coredumps/core.<exe>.<pid>.<sig>.<ts> file", "controller restarted unexpectedly with a coredump", or "produce a backtrace for review". Covers fetching the core, generating a module listing of running binaries, matching build-ids against {{EMBRACE2_DEBUG_DIR}}/.../.debug-registry.json, building a mapping dir, and running {{SKILLS_REPO}}/resources/analisa-coredump.sh.
 ---
 
 # analyze-core-dump
@@ -28,7 +28,7 @@ You need three things:
 
 1. **Core file** — fetched from `/data/coredumps/<name>` on the device.
 2. **Module listing JSON** — describes which binaries were running with their build-ids. Generated either by the deploy-ac3 GUI or manually (see workflow). Identifies the monitor binary, all firmware module `.so`s in the *active* `/data/FirmwareA|B/`, and project items in the active `/data/ProjetoA|B/`.
-3. **Debug directory** — local `~/Embrace2_debug/.../v<VERSION>/<ARCH>/` for the version that was running, ideally with a `.debug-registry.json` at its root.
+3. **Debug directory** — local `{{EMBRACE2_DEBUG_DIR}}/.../v<VERSION>/<ARCH>/` for the version that was running, ideally with a `.debug-registry.json` at its root.
 
 ## Workflow
 
@@ -53,13 +53,13 @@ scp <user>@<device>:/LOGS/firmware_embrace.log ~/analise/
 
 The listing is JSON containing the running binaries' build-ids so the analyzer can reconstruct the runtime symbol space.
 
-**GUI route (recommended):** Use the deploy-ac3 Java tool (`~/Projects/deploy-ac3/`). `DebugRemoteService.generateModuleListing` connects via SSH/Shellhub, reads:
+**GUI route (recommended):** Use the deploy-ac3 Java tool (`{{DEPLOY_AC3_DIR}}/`). `DebugRemoteService.generateModuleListing` connects via SSH/Shellhub, reads:
 
 - `/home/scenario/embrace_monitor` — monitor binary build-id
 - `/data/Configuracoes/ConfiguracoesFirmware.scj` — active firmware partition (`pastaExecucaoAtual` / `pastaExecucaoFirmware`); also `pastaNovaInstalacao` / `destinoNovoFirmware` for new-install dest
 - `/data/Configuracoes/ConfiguracoesExecucaoProjeto.scj` — active project partition
 
-It then `find`s every `.so` / `Embrace2Application*` / `embrace_monitor*` / executable file under the active firmware and project dirs, runs `readelf -n` on each (falling back to a local ARM `readelf` from `/opt/output-arm/host/bin/` over SCP, then to SHA-256), and writes `module-list-<controller>-<timestamp>.json`. The output schema:
+It then `find`s every `.so` / `Embrace2Application*` / `embrace_monitor*` / executable file under the active firmware and project dirs, runs `readelf -n` on each (falling back to a local ARM `readelf` from `{{BUILDROOT_OUT_ARM}}/host/bin/` over SCP, then to SHA-256), and writes `module-list-<controller>-<timestamp>.json`. The output schema:
 
 ```json
 {
@@ -95,11 +95,11 @@ Build the JSON manually following the schema above.
 
 | Source | Path |
 |---|---|
-| Firmware release | `~/Embrace2_debug/Aplicacao/v<VERSION>/{ARM,x86}/` |
-| Firmware branch-release | `~/Embrace2_debug/releases/Aplicacao/<branch>/{ARM,x86}/` |
-| Monitor release | `~/Embrace2_debug/Monitor/v<VERSION>/{ARM,x86}/` |
-| Monitor (via buildroot CI) | `~/Embrace2_debug/Monitor/os-v<VERSION>/{ARM,x86}/` |
-| Monitor branch-release | `~/Embrace2_debug/releases/Monitor/<branch>/{ARM,x86}/` |
+| Firmware release | `{{EMBRACE2_DEBUG_DIR}}/Aplicacao/v<VERSION>/{ARM,x86}/` |
+| Firmware branch-release | `{{EMBRACE2_DEBUG_DIR}}/releases/Aplicacao/<branch>/{ARM,x86}/` |
+| Monitor release | `{{EMBRACE2_DEBUG_DIR}}/Monitor/v<VERSION>/{ARM,x86}/` |
+| Monitor (via buildroot CI) | `{{EMBRACE2_DEBUG_DIR}}/Monitor/os-v<VERSION>/{ARM,x86}/` |
+| Monitor branch-release | `{{EMBRACE2_DEBUG_DIR}}/releases/Monitor/<branch>/{ARM,x86}/` |
 
 Each contains stripped binaries + matching `.debug` files + `.debug-registry.json`.
 
@@ -137,14 +137,14 @@ When `.debug-registry.json` is **absent or empty**, fall back to walking the deb
 ### 5. Run the analyzer
 
 ```bash
-~/Documentos/Recursos\ Embrace2/analisa-coredump.sh \
+{{SKILLS_REPO}}/resources/analisa-coredump.sh \
     ~/analise/core.Embrace2Application.1234.11.1700000000 \
     /path/to/mapping
 ```
 
 For batch / share-with-LLM output:
 ```bash
-~/Documentos/Recursos\ Embrace2/analisa-coredump.sh \
+{{SKILLS_REPO}}/resources/analisa-coredump.sh \
     ~/analise/core.<...> \
     /path/to/mapping \
     --export ~/analise/<core>.gdb.txt
@@ -155,8 +155,8 @@ The script:
 
   | Arch in core | GDB | Sysroot |
   |---|---|---|
-  | ARM | `/opt/output-arm/host/bin/arm-buildroot-linux-gnueabihf-gdb` | `/opt/output-arm/host/arm-buildroot-linux-gnueabihf/sysroot` |
-  | x86-64 | `/opt/output-x86/host/bin/x86_64-buildroot-linux-gnu-gdb` | `/opt/output-x86-full/host/x86_64-buildroot-linux-gnu/sysroot` |
+  | ARM | `{{BUILDROOT_OUT_ARM}}/host/bin/arm-buildroot-linux-gnueabihf-gdb` | `{{BUILDROOT_OUT_ARM}}/host/arm-buildroot-linux-gnueabihf/sysroot` |
+  | x86-64 | `{{BUILDROOT_OUT_X86_FULL}}/host/bin/x86_64-buildroot-linux-gnu-gdb` | `{{BUILDROOT_OUT_X86_FULL}}/host/x86_64-buildroot-linux-gnu/sysroot` |
   | x86-32 | same x86 GDB | same x86 sysroot |
 
 - Locates the executable via `execfn:` from `file <core>` output (falls back to `core.<exe>.…`, finally interactive prompt).
@@ -188,10 +188,10 @@ Then:
 
 Common cases:
 
-- **Debug build pushed via `deploy.sh`** to `/data/Firmware/` — the running binaries weren't built by CI, so no registry entry. Either (a) generate symbols locally with `~/Projects/aplicacao_ac/scripts/extract-debug-symbols.sh` against the `cmake-build-debug-banana/` dir and use that as the debug dir, or (b) repro the crash on a release build.
+- **Debug build pushed via `deploy.sh`** to `/data/Firmware/` — the running binaries weren't built by CI, so no registry entry. Either (a) generate symbols locally with `{{FIRMWARE_DIR}}/scripts/extract-debug-symbols.sh` against the `cmake-build-debug-banana/` dir and use that as the debug dir, or (b) repro the crash on a release build.
 - **Active partition wasn't scanned** — listing was generated from the wrong partition; re-run with the `*UseAlternate` flag.
-- **Wrong debug dir version** — listing shows version X but the chosen debug dir is for version Y. Check `~/Embrace2_debug/Aplicacao/v*/` and pick the one whose build-ids match.
-- **Branch-release crash** — debug bundle is under `~/Embrace2_debug/releases/Aplicacao/<branch>/` rather than `Aplicacao/v<X>/`.
+- **Wrong debug dir version** — listing shows version X but the chosen debug dir is for version Y. Check `{{EMBRACE2_DEBUG_DIR}}/Aplicacao/v*/` and pick the one whose build-ids match.
+- **Branch-release crash** — debug bundle is under `{{EMBRACE2_DEBUG_DIR}}/releases/Aplicacao/<branch>/` rather than `Aplicacao/v<X>/`.
 
 ## Common failure modes
 
@@ -210,5 +210,5 @@ Common cases:
 - → `embrace-firmware` for firmware crash hypotheses and the `gerarXSHX3.sh` packaging that produces `.xshx3` artifacts.
 - → `firmware-module-communication` when the backtrace lives in `Dispatcher` / `GerenciadorTimer` / `GerenciadorLinks` / `GerenciadorComunicacaoModular`.
 - → `embrace-buildroot` for the toolchain GDBs and sysroots.
-- `~/Documentos/Recursos Embrace2/guia-coredump.md` — Portuguese user-facing guide; this skill is the working version.
-- `~/Projects/deploy-ac3/src/main/java/br/ind/scenario/deploymonitor/service/debug/{CoreDumpAnalysisService,DebugRemoteService,DebugMappingCacheService,CoreDumpNaming}.java` — authoritative implementation of the listing + mapping flow.
+- `{{SKILLS_REPO}}/resources/guia-coredump.md` — Portuguese user-facing guide; this skill is the working version.
+- `{{DEPLOY_AC3_DIR}}/src/main/java/br/ind/scenario/deploymonitor/service/debug/{CoreDumpAnalysisService,DebugRemoteService,DebugMappingCacheService,CoreDumpNaming}.java` — authoritative implementation of the listing + mapping flow.
