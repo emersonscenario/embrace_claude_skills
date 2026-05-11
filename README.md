@@ -114,6 +114,8 @@ git pull
 
 If you edited `~/.config/embrace-skills/paths.conf`, run `./install.sh --reconfigure` instead — same effect, clearer in command history.
 
+If `git pull` brought in a brand-new skill, run `./install.sh` (without `--render-only`) so the new symlink gets created.
+
 ## Uninstall
 
 ```bash
@@ -128,7 +130,7 @@ This only removes symlinks pointing at `.rendered/` under this repo — unrelate
 
 The skills evolve as the codebase does. When updating:
 
-1. Edit the relevant `SKILL.md`.
+1. Edit the relevant `SKILL.md.tmpl` (the rendered `SKILL.md` under `.rendered/` is generated — never edit it directly).
 2. Keep the `description` frontmatter to triggering conditions only — never summarize the skill's workflow there (Claude will follow the description and skip the body).
 3. Quote source paths verbatim. Skills should reference `Core/Dispatcher.h`, not "the dispatcher class".
 4. After a notable behavior change in any of the source repos, sync the relevant skill alongside the AC3_Docs page (use `/embrace-docs` for the docs side).
