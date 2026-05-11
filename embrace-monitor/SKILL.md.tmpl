@@ -1,6 +1,6 @@
 ---
 name: embrace-monitor
-description: Use when working in ~/Projects/monitor/ or on the embrace_monitor C++20 daemon. Covers the IWorker pattern, MonitorFirmware singleton, WDTPulse (hardware watchdog over GPIO), AutenticacaoHardware, MonitorHardware, NTPUtil, ConexaoConfig (TCP), ConexaoFirmware (TCP + Unix socket between monitor and Embrace2Application), TokenCloud + EmbraceWebsocket + ComunicacaoCloud, AtualizacaoSistema (RAUC OTA), ServiceLogs, ConfigWebAPI (mongoose HTTP backend + Angular frontend at /opt/monitor/www/), the multiple architecture-aware build dirs, and core-dump generation hooks (prctl + crashHook). EmbraceOS has no journalctl; debug ladder uses dmesg + ServiceLogs + core dumps; HARDWARE.md is the primary constraint reference.
+description: Use when working in {{MONITOR_DIR}}/ or on the embrace_monitor C++20 daemon. Covers the IWorker pattern, MonitorFirmware singleton, WDTPulse (hardware watchdog over GPIO), AutenticacaoHardware, MonitorHardware, NTPUtil, ConexaoConfig (TCP), ConexaoFirmware (TCP + Unix socket between monitor and Embrace2Application), TokenCloud + EmbraceWebsocket + ComunicacaoCloud, AtualizacaoSistema (RAUC OTA), ServiceLogs, ConfigWebAPI (mongoose HTTP backend + Angular frontend at /opt/monitor/www/), the multiple architecture-aware build dirs, and core-dump generation hooks (prctl + crashHook). EmbraceOS has no journalctl; debug ladder uses dmesg + ServiceLogs + core dumps; HARDWARE.md is the primary constraint reference.
 ---
 
 # embrace-monitor
@@ -11,12 +11,12 @@ Daemon running on EmbraceOS as user `scenario`, binary at `/home/scenario/embrac
 
 The daemon is composed around a single `MonitorFirmware` singleton that implements every external-facing interface (`OwnerConexaoConfig`, `IOwnerConexaoFirmware`, `ExecutorLimpezaDisco`, `IComandosServicos`, `IWorker`, `IOwnerComunicacaoCloud`).
 
-EmbraceOS has **no journalctl** — runtime debug uses `dmesg` + ServiceLogs + core dumps. ARM target constraints live in `~/IdeaProjects/AC3_Docs/docs/Hardware/HARDWARE.md` (no swap, OOM-killer, fd / stack / thread caps, hardware watchdog, thermal trip).
+EmbraceOS has **no journalctl** — runtime debug uses `dmesg` + ServiceLogs + core dumps. ARM target constraints live in `{{DOCS_DIR}}/docs/Hardware/HARDWARE.md` (no swap, OOM-killer, fd / stack / thread caps, hardware watchdog, thermal trip).
 
 ## Layout
 
 ```
-~/Projects/monitor/
+{{MONITOR_DIR}}/
 ├── main.cpp                       — signal handlers, prctl(PR_SET_DUMPABLE), boot sequence
 ├── MonitorFirmware.{h,cpp}        — central singleton, owner of every connection
 ├── IWorker.h                      — Requisitante { CONFIG, FIRMWARE } worker contract
@@ -58,8 +58,8 @@ EmbraceOS has **no journalctl** — runtime debug uses `dmesg` + ServiceLogs + c
 
 | Build dir | `ARCHITECTURE` | `CMAKE_BUILD_TYPE` | Toolchain | Use |
 |---|---|---|---|---|
-| `build-x86` | X86 | Debug | `/opt/output-x86-full/host/share/buildroot/toolchainfile.cmake` | Local x86 dev |
-| `build-arm` | ARM | Debug | `/opt/output-arm/host/share/buildroot/toolchainfile.cmake` | Local ARM dev |
+| `build-x86` | X86 | Debug | `{{BUILDROOT_OUT_X86_FULL}}/host/share/buildroot/toolchainfile.cmake` | Local x86 dev |
+| `build-arm` | ARM | Debug | `{{BUILDROOT_OUT_ARM}}/host/share/buildroot/toolchainfile.cmake` | Local ARM dev |
 | `build-overlay-x86` / `build-overlay-arm` | X86 / ARM | Release | same | Used by buildroot CI to seed `rootfs_overlay_rauc/home/scenario/embrace_monitor` |
 | `build-release` | X86 | Release | same | Standalone release builds |
 | `build-ci` | X86 | Debug + `BUILD_TESTS=ON` + `INTEGRATION_TESTS=ON` + `COVERAGE=ON` | x86 host | Used by `full-build.yml` PR check |
@@ -75,18 +75,18 @@ GNU build-id (`-Wl,--build-id=sha1`) is set globally → survives `strip` and id
 ```bash
 # x86 debug
 ARCHITECTURE=X86 cmake -B build-x86 -DCMAKE_BUILD_TYPE=Debug \
-    -DCMAKE_TOOLCHAIN_FILE=/opt/output-x86-full/host/share/buildroot/toolchainfile.cmake
+    -DCMAKE_TOOLCHAIN_FILE={{BUILDROOT_OUT_X86_FULL}}/host/share/buildroot/toolchainfile.cmake
 cmake --build build-x86 -j$(nproc)
 
 # ARM debug
 ARCHITECTURE=ARM cmake -B build-arm -DCMAKE_BUILD_TYPE=Debug \
-    -DCMAKE_TOOLCHAIN_FILE=/opt/output-arm/host/share/buildroot/toolchainfile.cmake
+    -DCMAKE_TOOLCHAIN_FILE={{BUILDROOT_OUT_ARM}}/host/share/buildroot/toolchainfile.cmake
 cmake --build build-arm -j$(nproc)
 
 # tests (x86)
 ARCHITECTURE=X86 cmake -B build-test -DBUILD_TESTS=ON -DINTEGRATION_TESTS=ON \
     -DCMAKE_BUILD_TYPE=Debug \
-    -DCMAKE_TOOLCHAIN_FILE=/opt/output-x86-full/host/share/buildroot/toolchainfile.cmake
+    -DCMAKE_TOOLCHAIN_FILE={{BUILDROOT_OUT_X86_FULL}}/host/share/buildroot/toolchainfile.cmake
 cmake --build build-test
 ctest --test-dir build-test --output-on-failure
 ```
