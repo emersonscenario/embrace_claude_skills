@@ -29,8 +29,12 @@ description: dummy
 fw={{FIRMWARE_DIR}} mon={{MONITOR_DIR}} repo={{SKILLS_REPO}}
 EOF
 
+# Sandboxed HOME so the real ~/.config/embrace-skills/paths.conf can't leak in.
+FAKEHOME="$SANDBOX/home"
+mkdir -p "$FAKEHOME"
+
 # Run render-only with no user override.
-( cd "$FAKEREPO" && ./install.sh --render-only )
+( cd "$FAKEREPO" && EMBRACE_SKILLS_HOME="$FAKEHOME" ./install.sh --render-only )
 
 RENDERED="$FAKEREPO/.rendered/dummy-skill/SKILL.md"
 assert_file_exists "$RENDERED"
@@ -45,7 +49,7 @@ cat >"$FAKEREPO/paths.local.conf" <<'EOF'
 FIRMWARE_DIR="/over/firmware"
 EOF
 
-( cd "$FAKEREPO" && ./install.sh --render-only )
+( cd "$FAKEREPO" && EMBRACE_SKILLS_HOME="$FAKEHOME" ./install.sh --render-only )
 assert_contains "$RENDERED" "fw=/over/firmware"
 assert_contains "$RENDERED" "mon=/default/monitor"  # not overridden, falls back
 

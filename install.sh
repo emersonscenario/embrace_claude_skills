@@ -67,13 +67,11 @@ for tmpl in "$REPO"/*/SKILL.md.tmpl; do
     skill=$(basename "$(dirname "$tmpl")")
     out="$REPO/.rendered/$skill/SKILL.md"
     mkdir -p "$REPO/.rendered/$skill"
-    {
-        echo "<!-- AUTO-GENERATED FROM $skill/SKILL.md.tmpl — DO NOT EDIT -->"
-        echo
-    } >"$out.header"
-    render_file "$tmpl" "$out.body"
-    cat "$out.header" "$out.body" >"$out"
-    rm -f "$out.header" "$out.body"
+    render_file "$tmpl" "$out"
+    # Inject the AUTO-GENERATED marker as a YAML comment INSIDE the frontmatter
+    # (right after the opening `---`). Putting it outside the frontmatter
+    # confuses the skill loader's description parser.
+    sed -i "1 a # AUTO-GENERATED FROM $skill/SKILL.md.tmpl — DO NOT EDIT" "$out"
     SKILLS+=("$skill")
 done
 
