@@ -82,6 +82,22 @@ if [ "$RENDER_ONLY" -eq 1 ]; then
     exit 0
 fi
 
-# Symlink phase (Tasks 5 & 6 fill these in).
-echo "install.sh: --mode=$MODE not yet implemented in this task" >&2
-exit 0
+case "$MODE" in
+    global)
+        TARGET_DIR="${EMBRACE_SKILLS_HOME:-$HOME}/.claude/skills"
+        mkdir -p "$TARGET_DIR"
+        for skill in "${SKILLS[@]}"; do
+            ln -sfn "$REPO/.rendered/$skill" "$TARGET_DIR/$skill"
+        done
+        echo "Linked ${#SKILLS[@]} skill(s) into $TARGET_DIR"
+        ;;
+    per-repo)
+        # Task 6 fills this in.
+        echo "install.sh: --mode=per-repo not yet implemented" >&2
+        exit 1
+        ;;
+    *)
+        echo "install.sh: unknown mode: $MODE" >&2
+        exit 2
+        ;;
+esac
