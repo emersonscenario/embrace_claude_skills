@@ -1,0 +1,24 @@
+# paths.conf.example — copy to ~/.config/embrace-skills/paths.conf (or
+# <repo>/paths.local.conf) and uncomment only the lines you need to change.
+# Variables not set here inherit from paths.defaults.conf.
+
+# Buildroot external tree
+# BUILDROOT_DIR="/opt/my-buildroot"
+
+# Buildroot output trees (3 variants)
+# BUILDROOT_OUT_X86_FULL="/opt/output-x86-full"
+# BUILDROOT_OUT_X86_PRO="/opt/output-x86-pro"
+# BUILDROOT_OUT_ARM="/opt/output-arm"
+
+# Source repos
+# MONITOR_DIR="$HOME/Projects/monitor"
+# FIRMWARE_DIR="$HOME/Projects/aplicacao_ac"
+# DEPLOY_AC3_DIR="$HOME/Projects/deploy-ac3"
+# DOCS_DIR="$HOME/IdeaProjects/AC3_Docs"
+
+# Release / debug artefact dirs
+# EMBRACE2_DIR="$HOME/Embrace2"
+# EMBRACE2_DEBUG_DIR="$HOME/Embrace2_debug"
+
+# Misc working dir (used by buildroot provisioning scripts for the Banana Pi base image)
+# RECURSOS_DIR="$HOME/Documentos/Recursos Embrace2"
